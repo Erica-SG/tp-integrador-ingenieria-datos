@@ -1,0 +1,110 @@
+
+version: "3.9"
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.1
+    container_name: gobierno_zookeeper
+    env_file:
+      - ../../.env
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "7093:2181"
+    networks:
+      - gobierno_net
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.1
+    container_name: gobierno_kafka
+    env_file:
+      - ../../.env
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "7092:9092"
+    depends_on:
+      - zookeeper
+    networks:
+      - gobierno_net
+    restart: unless-stopped
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    container_name: gobierno_elasticsearch
+    env_file:
+      - ../../.env
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "7091:9200"
+    networks:
+      - gobierno_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sS http://localhost:9200/_cluster/health | grep -q '\"status\"' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  openmetadata:
+    image: openmetadata/server:0.13.2
+    container_name: openmetadata
+    env_file:
+      - ../../.env
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    ports:
+      - "7090:8585"
+    environment:
+      # Database connection - PostgreSQL
+      DB_DRIVER_CLASS: org.postgresql.Driver
+      DB_SCHEME: postgresql
+      DB_HOST: postgres_tp
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER}
+      DB_USER_PASSWORD: ${POSTGRES_PASSWORD}
+      OM_DATABASE: ${POSTGRES_DB}
+
+      # Elasticsearch
+      ELASTICSEARCH_HOST: gobierno_elasticsearch
+      ELASTICSEARCH_PORT: "9200"
+
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+      # OpenMetadata admin credentials (from ../../.env)
+      OPENMETADATA_ADMIN_USERNAME: ${OPENMETADATA_ADMIN_USERNAME}
+      OPENMETADATA_ADMIN_PASSWORD: ${OPENMETADATA_ADMIN_PASSWORD}
+    networks:
+      - gobierno_net
+      - almacenamiento_net
+    restart: unless-stopped
+
+volumes:
+  es_data:
+
+networks:
+  gobierno_net:
+    driver: bridge
+  almacenamiento_net:
+    external: true
+    name: almacenamiento_net
+
